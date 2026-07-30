@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DRWSA Maintenance | Report</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="app-shell" id="shell"></div>
+
+<script src="/js/app.js"></script>
+<script>
+let blockCount = 0;
+let rowCount = 0;
+const rowPhotos = {}; // itemRowId -> File
+let isSubmitting = false; // guards against double-click / double-tap firing two submissions
+let suggestions = { suppliers: [], ctrlNumbers: [], items: [], remarks: [], receivedBy: [], recentDates: [], itemDefaults: {}, ctrlDefaults: {} };
+
+function todayStr() { return new Date().toISOString().slice(0,10); }
+
+async function init() {
+  await requireLogin();
+  renderShell('report', 'Report Data');
+
+  document.getElementById('page-content').innerHTML = `
+    <div class="summary-cards">
+      <div class="summary-card" id="card-transactions" style="cursor:pointer;"><div class="label">Total number of Transactions</div><div class="value" id="val-transactions">–</div></div>
+      <div class="summary-card blue" id="card-amount" style="cursor:pointer;"><div class="label">Total Delivery Cost</div><div class="value" id="val-amount">–</div></div>
+      <div class="summary-card teal" id="card-suppliers" style="cursor:pointer;"><div class="label">Total number of Suppliers</div><div class="value" id="val-suppliers">–</div></div>
+    </div>
+
+    <p class="muted" style="font-size:11px;margin:4px 0 12px;">Start typing any field — supplier, CTRL/OR/Invoice number, or item — and matching entries from history will be suggested. Enter the date, supplier, and CTRL/OR/Invoice number once per transaction; every item below shares them unless you give an item its own CTRL number. Press Enter to jump to the next field — it'll add a new item row automatically when you reach the end.</p>
+
+    <div id="report-blocks"></div>
+
+    <datalist id="dl-suppliers"></datalist>
+    <datalist id="dl-items"></datalist>
+    <datalist id="dl-ctrl"></datalist>
+    <datalist id="dl-remarks"></datalist>
+    <datalist id="dl-received"></datalist>
+    <datalist id="dl-dates"></datalist>
+
+    <div style="margin-top:4px;">
+      <button class="btn btn-gray" id="add-block-btn">+ Add Another Transaction</button>
+    </div>
+    <div class="flex-between" style="margin-top:18px;justify-content:flex-end;gap:10px;">
+      <button class="btn btn-red" id="cancel-btn">Cancel</button>
+      <button class="btn btn-green" id="submit-btn">Submit</button>
+    </div>
+  `;
+
+  document.getElementById('cancel-btn').onclick = resetForm;
+  document.getElementById('submit-btn').onclick = submitReport;
+  document.getElementById('add-block-btn').onclick = () => addBlock();
+  document.getElementById('card-transactions').onclick = () => window.location.href = '/analytics.html?type=count';
+  document.getElementById('card-amount').onclick = () => window.location.href = '/analytics.html?type=amount';
+  document.getElementById('card-suppliers').onclick = () => window.location.href = '/analytics.html?type=count&showSuppliers=1';
+
+  loadSummary();
+  try {
+    await loadSuggestions();
+  } catch (e) {
+    console.error('loadSuggestions failed:', e);
+  }
+  addBlock();
+}
+
+async function loadSummary() {
+  try {
+    const s = await api('/dashboard/summary');
+    document.getElementById('val-transactions').textContent = s.totalTransactions;
+    document.getElementById('val-amount').textContent = fmtMoney(s.totalAmount);
+    document.getElementById('val-suppliers').textContent = s.totalSuppliers;
+  } catch (e) { /* ignore */ }
+}
+
+async function loadSuggestions() {
+  try {
+    suggestions = await api('/transactions/suggestions');
+    document.getElementById('dl-suppliers').innerHTML = suggestions.suppliers.map(s => `<option value="${escapeHtml(s)}">`).join('');
+    document.getElementById('dl-ctrl').innerHTML = suggestions.ctrlNumbers.map(s => `<option value="${escapeHtml(s)}">`).join('');
+    document.getElementById('dl-items').innerHTML = suggestions.items.map(s => `<option value="${escapeHtml(s)}">`).join('');
+    document.getElementById('dl-remarks').innerHTML = suggestions.remarks.map(s => `<option value="${escapeHtml(s)}">`).join('');
+    document.getElementById('dl-received').innerHTML = suggestions.receivedBy.map(s => `<option value="${escapeHtml(s)}">`).join('');
+    document.getElementById('dl-dates').innerHTML = (suggestions.recentDates || []).map(s => `<option value="${escapeHtml(isoToMDY(s))}">`).join('');
+  } catch (e) { /* ignore, non-critical */ }
+}
+
+// ---------- Transaction blocks (one block = one transaction: shared date/supplier/CTRL/received-by + N items) ----------
+function addBlock() {
+  try {
+    blockCount++;
+    const bId = blockCount;
+    const container = document.getElementById('report-blocks');
+    const div = document.createElement('div');
+    div.className = 'panel panel-outline block-panel';
+    div.dataset.blockId = bId;
+    div.style.marginBottom = '18px';
+    div.innerHTML = `
+      <div class="flex-between">
+        <h2 style="margin:0;">Transaction Details</h2>
+        <button class="btn btn-red remove-block-btn" style="padding:6px 12px;font-size:12px;display:none;" onclick="removeBlock(${bId})">Remove Transaction ✕</button>
+      </div>
+      <div class="field-grid" style="grid-template-columns:repeat(4,1fr);">
+        <div class="field"><label>Date</label><input type="text" class="b-date enter-nav" list="dl-dates" value="${isoToMDY(todayStr())}"></div>
+        <div class="field"><label>Supplier Name</label><input type="text" class="b-supplier enter-nav" list="dl-suppliers" placeholder="Supplier"></div>
+        <div class="field"><label>Ctrl/Invoice/OR number</label><input type="text" class="b-ctrl enter-nav" list="dl-ctrl" placeholder="Main CTRL/OR/Inv #" onblur="autofillFromCtrl(${bId})"></div>
+        <div class="field"><label>Received/Verified by</label><input type="text" class="b-received enter-nav" list="dl-received" placeholder="Name"></div>
+      </div>
+      <div class="field" style="margin-bottom:14px;max-width:420px;">
+        <label>Remarks (optional — applies to all items below unless an item has its own)</label>
+        <input type="text" class="b-remarks enter-nav" list="dl-remarks" placeholder="Remarks">
+      </div>
+
+      <div style="overflow-x:auto;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Item</th><th>Quantity</th><th>Unit</th><th>Price</th><th>Total Amount</th>
+              <th>CTRL# (only if different)</th><th>Photo</th><th>Remarks (only if different)</th><th></th>
+            </tr>
+          </thead>
+          <tbody class="items-tbody"></tbody>
+        </table>
+      </div>
+      <div style="margin-top:12px;">
+        <button class="btn btn-gray" style="padding:6px 14px;font-size:12px;" onclick="addItemRow(${bId})">+ Add Item</button>
+      </div>
+    `;
+    container.appendChild(div);
+    div.addEventListener('keydown', onBlockKeydown);
+    attachDateMask(div.querySelector('.b-date'));
+    addItemRow(bId);
+    updateRemoveBlockButtons();
+    return bId;
+  } catch (e) {
+    console.error('addBlock failed:', e);
+    toast('Could not add a transaction: ' + e.message, true);
+  }
+}
+
+function removeBlock(blockId) {
+  const block = document.querySelector(`.block-panel[data-block-id="${blockId}"]`);
+  if (!block) return;
+  block.querySelectorAll('tr[data-row-id]').forEach(tr => delete rowPhotos[tr.dataset.rowId]);
+  block.remove();
+  updateRemoveBlockButtons();
+}
+
+function updateRemoveBlockButtons() {
+  const blocks = document.querySelectorAll('#report-blocks > .block-panel');
+  const show = blocks.length > 1;
+  document.querySelectorAll('.remove-block-btn').forEach(b => b.style.display = show ? 'inline-block' : 'none');
+}
+
+// ---------- Item rows within a block ----------
+function addItemRow(blockId) {
+  try {
+    rowCount++;
+    const id = rowCount;
+    const block = document.querySelector(`.block-panel[data-block-id="${blockId}"]`);
+    const tbody = block.querySelector('.items-tbody');
+    const tr = document.createElement('tr');
+    tr.dataset.rowId = id;
+    tr.dataset.blockId = blockId;
+    tr.innerHTML = `
+      <td><input type="text" class="e-item enter-nav" list="dl-items" placeholder="Item" onblur="autofillFromItem(${id})"></td>
+      <td><input type="number" class="e-qty enter-nav" min="0" step="any" oninput="recalcRow(${id})"></td>
+      <td>
+        <select class="e-unit enter-nav">
+          <option value="pcs">pcs</option><option value="box">box</option>
+          <option value="dozen">dozen</option><option value="meter">meter</option>
+          <option value="kgs">kgs</option><option value="pound">pound</option><option value="sacks">sacks</option>
+        </select>
+      </td>
+      <td><input type="number" class="e-price enter-nav" min="0" step="any" oninput="recalcRow(${id})"></td>
+      <td><input type="text" class="e-total" readonly value="0.00"></td>
+      <td><input type="text" class="e-ctrl enter-nav" list="dl-ctrl" placeholder="Same as above"></td>
+      <td>
+        <button class="btn btn-green" style="padding:6px 12px;font-size:12px;" onclick="pickPhoto(${id})">Insert</button>
+        <input type="file" accept="image/png,image/jpeg" style="display:none;" onchange="onPhotoChosen(${id}, this)">
+        <div style="font-size:10px;" class="photo-label"></div>
+      </td>
+      <td><input type="text" class="e-remarks enter-nav" list="dl-remarks" placeholder="Same as above"></td>
+      <td><button class="btn btn-red" style="padding:6px 10px;font-size:12px;" onclick="removeItemRow(${id})">✕</button></td>
+    `;
+    tbody.appendChild(tr);
+    return id;
+  } catch (e) {
+    console.error('addItemRow failed:', e);
+    toast('Could not add an item row: ' + e.message, true);
+  }
+}
+
+function removeItemRow(id) {
+  const tr = document.querySelector(`tr[data-row-id="${id}"]`);
+  if (tr) tr.remove();
+  delete rowPhotos[id];
+}
+
+function recalcRow(id) {
+  const tr = document.querySelector(`tr[data-row-id="${id}"]`);
+  const qty = parseFloat(tr.querySelector('.e-qty').value) || 0;
+  const price = parseFloat(tr.querySelector('.e-price').value) || 0;
+  tr.querySelector('.e-total').value = (qty * price).toFixed(2);
+}
+
+function pickPhoto(id) {
+  const tr = document.querySelector(`tr[data-row-id="${id}"]`);
+  tr.querySelector('input[type=file]').click();
+}
+
+function onPhotoChosen(id, input) {
+  const tr = document.querySelector(`tr[data-row-id="${id}"]`);
+  if (input.files && input.files[0]) {
+    rowPhotos[id] = input.files[0];
+    tr.querySelector('.photo-label').textContent = input.files[0].name;
+  }
+}
+
+// ---------- Autocomplete: commit the top matching suggestion for a field ----------
+// Native <input list> datalists don't auto-commit a match on their own — Tab just
+// moves focus and drops the partial text, and Enter would just submit. This fills
+// in the best match first, the way a real autocomplete widget would.
+function commitTopMatch(input, datalistId) {
+  const typed = input.value.trim().toLowerCase();
+  if (!typed) return;
+  const dl = document.getElementById(datalistId);
+  if (!dl) return;
+  const options = [...dl.options].map(o => o.value);
+  const exact = options.find(o => o.toLowerCase() === typed);
+  if (exact) return; // already an exact match, nothing to fill in
+  const match = options.find(o => o.toLowerCase().startsWith(typed));
+  if (match) input.value = match;
+}
+
+function handleTabAutocomplete(e, datalistId) {
+  if (e.key !== 'Tab' || e.shiftKey) return;
+  commitTopMatch(e.target, datalistId);
+}
+
+// Pressing Enter in any field of a transaction block commits that field's
+// autocomplete match (if it has a datalist) and jumps to the next field in
+// the block, in on-screen order. From the last field of the last item row,
+// it adds a fresh item row and focuses its first field instead.
+function onBlockKeydown(e) {
+  if (e.key !== 'Enter' || e.shiftKey) return;
+  const target = e.target;
+  if (!target.classList || !target.classList.contains('enter-nav')) return;
+  e.preventDefault();
+
+  const listId = target.getAttribute('list');
+  if (listId) commitTopMatch(target, listId);
+
+  const block = target.closest('.block-panel');
+  if (!block) return;
+  const navEls = [...block.querySelectorAll('.enter-nav')];
+  const idx = navEls.indexOf(target);
+
+  if (idx > -1 && idx < navEls.length - 1) {
+    const next = navEls[idx + 1];
+    next.focus();
+    if (next.select) next.select();
+  } else {
+    const blockId = parseInt(block.dataset.blockId, 10);
+    const newId = addItemRow(blockId);
+    const newTr = document.querySelector(`tr[data-row-id="${newId}"]`);
+    const firstField = newTr && newTr.querySelector('.enter-nav');
+    if (firstField) firstField.focus();
+  }
+}
+
+// When a known CTRL/OR/Invoice number is entered, pull in the date/supplier/received/remarks
+// that were used with it before (this is also the same rule the server uses to combine transactions).
+function autofillFromCtrl(blockId) {
+  const block = document.querySelector(`.block-panel[data-block-id="${blockId}"]`);
+  const ctrl = block.querySelector('.b-ctrl').value.trim().toLowerCase();
+  const match = suggestions.ctrlDefaults[ctrl];
+  if (!match) return;
+  const dateField = block.querySelector('.b-date');
+  const supplierField = block.querySelector('.b-supplier');
+  const receivedField = block.querySelector('.b-received');
+  const remarksField = block.querySelector('.b-remarks');
+  if (!dateField.value && match.date) dateField.value = isoToMDY(match.date);
+  if (!supplierField.value && match.supplier_name) supplierField.value = match.supplier_name;
+  if (!receivedField.value && match.received_by) receivedField.value = match.received_by;
+  if (!remarksField.value && match.remarks) remarksField.value = match.remarks;
+}
+
+// When a known item name is entered, pull in its usual unit and last price.
+function autofillFromItem(id) {
+  const tr = document.querySelector(`tr[data-row-id="${id}"]`);
+  const item = tr.querySelector('.e-item').value.trim().toLowerCase();
+  const match = suggestions.itemDefaults[item];
+  if (!match) return;
+  const unitField = tr.querySelector('.e-unit');
+  const priceField = tr.querySelector('.e-price');
+  if (match.unit) unitField.value = match.unit;
+  if (!priceField.value && match.price) { priceField.value = match.price; recalcRow(id); }
+}
+
+function resetForm() {
+  document.getElementById('report-blocks').innerHTML = '';
+  Object.keys(rowPhotos).forEach(k => delete rowPhotos[k]);
+  addBlock();
+  toast('Form cleared.');
+}
+
+async function submitReport() {
+  // Guard against double-click / double-tap (or a slow/laggy connection where a
+  // second click lands before the first request finishes) submitting the same
+  // report twice. This check + the button disable below both happen synchronously
+  // before any "await", so a near-simultaneous second click is blocked immediately.
+  if (isSubmitting) return;
+  isSubmitting = true;
+  const submitBtn = document.getElementById('submit-btn');
+  const cancelBtn = document.getElementById('cancel-btn');
+  const originalLabel = submitBtn ? submitBtn.textContent : 'Submit';
+  if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Submitting…'; }
+  if (cancelBtn) cancelBtn.disabled = true;
+
+  try {
+    await doSubmitReport();
+  } finally {
+    // Only re-enable if we're still on this page (a successful submit navigates
+    // away to /catalog.html, so this mainly matters for the error/validation path).
+    isSubmitting = false;
+    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = originalLabel; }
+    if (cancelBtn) cancelBtn.disabled = false;
+  }
+}
+
+async function doSubmitReport() {
+  const blocks = [...document.querySelectorAll('#report-blocks > .block-panel')];
+  const rows = [];
+  const formData = new FormData();
+  let invalidDate = false;
+
+  blocks.forEach(block => {
+    if (invalidDate) return;
+    const blockId = block.dataset.blockId;
+    const dateRaw = block.querySelector('.b-date').value.trim();
+    const date = mdyToISO(dateRaw);
+    const supplier_name = block.querySelector('.b-supplier').value.trim();
+    if (!supplier_name) return; // whole transaction skipped if supplier is blank
+    if (dateRaw && !date) { toast(`"${dateRaw}" isn't a valid date — please use MM/DD/YYYY.`, true); invalidDate = true; return; }
+    const mainCtrl = block.querySelector('.b-ctrl').value.trim();
+    const received_by = block.querySelector('.b-received').value.trim();
+    const blockRemarks = block.querySelector('.b-remarks').value.trim();
+
+    const trs = [...block.querySelectorAll('.items-tbody tr')];
+    trs.forEach(tr => {
+      const item_name = tr.querySelector('.e-item').value.trim();
+      if (!item_name) return; // skip empty item rows
+      const rowId = tr.dataset.rowId;
+      const itemCtrl = tr.querySelector('.e-ctrl').value.trim();
+      const itemRemarks = tr.querySelector('.e-remarks').value.trim();
+      rows.push({
+        client_block: 'b' + blockId,
+        date,
+        supplier_name,
+        ctrl_number: itemCtrl || mainCtrl,
+        item_name,
+        quantity: tr.querySelector('.e-qty').value,
+        unit: tr.querySelector('.e-unit').value,
+        price: tr.querySelector('.e-price').value,
+        total_amount: tr.querySelector('.e-total').value,
+        received_by,
+        remarks: itemRemarks || blockRemarks
+      });
+      if (rowPhotos[rowId]) {
+        formData.append(`photo_${rows.length - 1}`, rowPhotos[rowId]);
+      }
+    });
+  });
+
+  if (invalidDate) return;
+  if (!rows.length) { toast('Please fill in at least one complete transaction (supplier + at least one item).', true); return; }
+  for (const r of rows) {
+    if (!r.date) { toast('Please set a date for every transaction.', true); return; }
+  }
+
+  formData.append('rows', JSON.stringify(rows));
+  // A fresh one-time token per submit attempt — lets the server recognize and
+  // ignore an exact duplicate request (e.g. a click that still got through, or
+  // a browser retry on a laggy connection) instead of saving it twice.
+  formData.append('idempotency_key', (crypto && crypto.randomUUID) ? crypto.randomUUID() : ('r' + Date.now() + Math.random().toString(36).slice(2)));
+
+  try {
+    const result = await api('/transactions', { method: 'POST', body: formData });
+    toast(`Saved ${result.transactions.length} transaction(s).`);
+    window.location.href = '/catalog.html';
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+init();
+</script>
+</body>
+</html>

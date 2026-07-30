@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DRWSA Maintenance | Analytics</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="app-shell" id="shell"></div>
+
+<script src="/js/app.js"></script>
+<script>
+function defaultFrom() {
+  const d = new Date(); d.setMonth(d.getMonth() - 3);
+  return d.toISOString().slice(0,10);
+}
+function todayStr() { return new Date().toISOString().slice(0,10); }
+
+async function init() {
+  await requireLogin();
+  renderShell('analytics', 'Analytics Dashboard');
+
+  const params = new URLSearchParams(window.location.search);
+  const typeParam = params.get('type') === 'count' ? 'count' : 'amount';
+  const showAllSuppliers = params.get('showSuppliers') === '1';
+  // Coming from the dashboard's "Total number of Suppliers" card: show every
+  // supplier with transaction history, so widen the range to all-time.
+  const fromDefault = showAllSuppliers ? '' : defaultFrom();
+
+  document.getElementById('page-content').innerHTML = `
+    <div class="panel">
+      <div class="flex-between" style="flex-wrap:wrap;gap:10px;">
+        <h2 style="border:none;padding:0;margin:0;">Transaction Breakdown</h2>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <input type="text" id="f-from" class="pill-input" style="width:160px;" value="${isoToMDY(fromDefault)}">
+          <span>to</span>
+          <input type="text" id="f-to" class="pill-input" style="width:160px;" value="${isoToMDY(todayStr())}">
+          <select id="f-type" class="pill-input" style="width:220px;">
+            <option value="amount" ${typeParam === 'amount' ? 'selected' : ''}>By Total Amount Paid to Supplier</option>
+            <option value="count" ${typeParam === 'count' ? 'selected' : ''}>By Number of Transactions</option>
+          </select>
+          <select id="f-charttype" class="pill-input" style="width:130px;">
+            <option value="pie">Pie chart</option>
+            <option value="column">Column chart</option>
+            <option value="bar">Bar chart</option>
+          </select>
+          <button class="btn btn-blue" id="apply-btn">Filter</button>
+        </div>
+      </div>
+      <hr style="margin:16px 0;border:none;border-top:2px solid #eee;">
+      <p class="muted" style="font-size:11px;margin-top:-10px;">Pie, column, and bar charts compare suppliers over the selected date range.</p>
+
+      <div class="summary-cards" style="grid-template-columns:1fr 1fr;">
+        <div class="summary-card blue"><div class="label">Total Transactions (in range)</div><div class="value" id="stat-count">–</div></div>
+        <div class="summary-card teal"><div class="label">Total Amount (in range)</div><div class="value" id="stat-amount">–</div></div>
+      </div>
+
+      <div id="chart-container" style="margin-top:10px;"></div>
+
+      <table class="data-table" style="margin-top:20px;">
+        <thead><tr><th>Supplier</th><th>Number of Transactions</th><th>Total Amount</th></tr></thead>
+        <tbody id="breakdown-body"></tbody>
+      </table>
+
+      <div class="flex-between" style="margin-top:16px;justify-content:flex-end;">
+        <button class="btn btn-green" id="download-btn">Download XLSX Chart</button>
+      </div>
+      <p class="muted" style="font-size:11px;text-align:right;margin-top:6px;">Downloads a real Excel file with an embedded chart plus the full breakdown data table.</p>
+    </div>
+
+    <div class="panel" style="margin-top:20px;">
+      <div class="flex-between" style="flex-wrap:wrap;gap:10px;">
+        <div>
+          <h2 style="border:none;padding:0;margin:0;">All Suppliers</h2>
+          <p class="muted" style="font-size:11px;margin-top:4px;">Every supplier with transaction history on file, regardless of the date range above.</p>
+        </div>
+        <button class="btn btn-green" id="download-suppliers-btn">Download Suppliers XLSX</button>
+      </div>
+      <table class="data-table" style="margin-top:10px;">
+        <thead><tr><th>Supplier</th><th>Total Transactions</th><th>Total Amount Paid</th><th>First Delivery</th><th>Last Delivery</th></tr></thead>
+        <tbody id="suppliers-body"></tbody>
+      </table>
+    </div>
+  `;
+
+  document.getElementById('apply-btn').onclick = loadAnalytics;
+  document.getElementById('f-charttype').onchange = loadAnalytics;
+  document.getElementById('download-btn').onclick = downloadXlsx;
+  attachDateMask(document.getElementById('f-from'));
+  attachDateMask(document.getElementById('f-to'));
+  document.getElementById('download-suppliers-btn').onclick = () => {
+    window.open('/api/analytics/suppliers/export/xlsx', '_blank');
+  };
+
+  loadAnalytics();
+  loadAllSuppliers();
+}
+
+async function loadAnalytics() {
+  const from = mdyToISO(document.getElementById('f-from').value);
+  const to = mdyToISO(document.getElementById('f-to').value);
+  const type = document.getElementById('f-type').value;
+  const chartType = document.getElementById('f-charttype').value;
+  const valueLabel = type === 'count' ? 'Number of Transactions' : 'Total Amount Paid (₱)';
+  try {
+    const result = await api(`/analytics?from=${from}&to=${to}&type=${type}`);
+    document.getElementById('stat-count').textContent = result.totalTransactions;
+    document.getElementById('stat-amount').textContent = fmtMoney(result.totalAmount);
+
+    const chartContainer = document.getElementById('chart-container');
+    const data = result.breakdown.map(b => ({ label: b.supplier_name, value: type === 'count' ? b.count : b.amount }));
+    const title = `${valueLabel} by Supplier`;
+    drawChart(chartContainer, data, chartType, {
+      size: 280, width: 640, height: 320,
+      title: chartType === 'pie' ? undefined : title,
+      xLabel: chartType === 'pie' ? undefined : 'Supplier',
+      yLabel: chartType === 'pie' ? undefined : valueLabel,
+      onSliceClick: (label) => {
+        if (label === 'Others') return; // not a real supplier — nothing to filter by
+        window.location.href = `/catalog.html?supplier=${encodeURIComponent(label)}`;
+      }
+    });
+
+    const body = document.getElementById('breakdown-body');
+    if (!result.breakdown.length) {
+      body.innerHTML = `<tr><td colspan="3" class="empty-state">No transactions in this range.</td></tr>`;
+    } else {
+      body.innerHTML = result.breakdown.map(b => `
+        <tr><td>${escapeHtml(b.supplier_name)}</td><td>${b.count}</td><td>${fmtMoney(b.amount)}</td></tr>
+      `).join('');
+    }
+  } catch (e) { toast(e.message, true); }
+}
+
+async function loadAllSuppliers() {
+  try {
+    const suppliers = await api('/analytics/suppliers');
+    const body = document.getElementById('suppliers-body');
+    if (!suppliers.length) {
+      body.innerHTML = `<tr><td colspan="5" class="empty-state">No suppliers on file yet.</td></tr>`;
+    } else {
+      body.innerHTML = suppliers.map(s => `
+        <tr style="cursor:pointer;" onclick="window.location.href='/catalog.html?supplier=${encodeURIComponent(s.supplier_name)}'">
+          <td>${escapeHtml(s.supplier_name)}</td>
+          <td>${s.count}</td>
+          <td>${fmtMoney(s.amount)}</td>
+          <td>${escapeHtml(s.first_date ? formatDate(s.first_date) : '—')}</td>
+          <td>${escapeHtml(s.last_date ? formatDate(s.last_date) : '—')}</td>
+        </tr>`).join('');
+    }
+  } catch (e) { /* ignore, non-critical */ }
+}
+
+function downloadXlsx() {
+  const from = mdyToISO(document.getElementById('f-from').value);
+  const to = mdyToISO(document.getElementById('f-to').value);
+  const type = document.getElementById('f-type').value;
+  const chartType = document.getElementById('f-charttype').value;
+  window.open(`/api/analytics/export/xlsx?from=${from}&to=${to}&type=${type}&chartType=${chartType}`, '_blank');
+}
+
+init();
+</script>
+</body>
+</html>

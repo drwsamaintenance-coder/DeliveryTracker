@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DRWSA Maintenance | Login</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="login-shell">
+    <div class="login-card">
+      <div class="login-left">
+        <h1>WELCOME BACK</h1>
+        <input type="text" id="username" placeholder="Username" autocomplete="username">
+        <input type="password" id="password" placeholder="Password" autocomplete="current-password">
+        <div class="login-error" id="login-error"></div>
+        <button id="signin-btn">Sign In</button>
+        <div class="muted" style="font-size:11px;">Demo accounts: juan / password123, jess / password123</div>
+      </div>
+      <div class="login-right">
+        <div id="login-logo">
+          <svg width="130" height="130" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+            <path d="M32 4 L58 14 V30 C58 46 47 56 32 60 C17 56 6 46 6 30 V14 Z" fill="#1c3b6e"/>
+            <path d="M32 8 L54 17 V30 C54 44 45 52 32 56 C19 52 10 44 10 30 V17 Z" fill="#2ec2d8"/>
+            <circle cx="32" cy="30" r="10" fill="#0b0b0d"/>
+          </svg>
+        </div>
+        <h2>DRWSA MAINTENANCE</h2>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/app.js"></script>
+  <script>
+    api('/settings').then(({ logoUrl }) => {
+      if (logoUrl) {
+        document.getElementById('login-logo').innerHTML =
+          `<img src="${logoUrl}" alt="DRWSA logo" style="width:130px;height:130px;object-fit:contain;border-radius:16px;">`;
+      }
+    }).catch(() => {});
+
+    async function attemptLogin() {
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+      const errEl = document.getElementById('login-error');
+      errEl.textContent = '';
+      if (!username || !password) {
+        errEl.textContent = 'Please enter both username and password.';
+        return;
+      }
+      try {
+        await api('/auth/login', { method: 'POST', body: { username, password } });
+        window.location.href = '/dashboard.html';
+      } catch (e) {
+        errEl.textContent = e.message;
+      }
+    }
+    document.getElementById('signin-btn').addEventListener('click', attemptLogin);
+    document.getElementById('password').addEventListener('keydown', e => { if (e.key === 'Enter') attemptLogin(); });
+
+    // If already logged in, skip straight to dashboard
+    api('/auth/me').then(() => window.location.href = '/dashboard.html').catch(() => {});
+  </script>
+</body>
+</html>

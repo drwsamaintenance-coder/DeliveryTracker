@@ -1,0 +1,15 @@
+# Secrets — never commit these
+serviceAccountKey.json
+.env
+
+# Dependencies
+node_modules/
+
+# Local runtime files
+server-log.txt
+
+# User-uploaded content (delivery photos, logos, avatars) — this is data,
+# not code, and doesn't belong in version control. The folder itself is kept
+# via .gitkeep so the app has somewhere to write to right after a fresh clone.
+public/uploads/*
+!public/uploads/.gitkeep

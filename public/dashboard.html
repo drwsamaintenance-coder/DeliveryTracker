@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DRWSA Maintenance | Dashboard</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="app-shell" id="shell"></div>
+
+<script src="/js/app.js"></script>
+<script>
+let calYear, calMonth;
+
+async function init() {
+  await requireLogin();
+  renderShell('dashboard', 'Dashboard');
+  document.getElementById('sidebar-extra').innerHTML = `
+    <div class="breakdown-panel">
+      <div class="flex-between"><h3 style="margin:0;font-size:14px;">Transaction Breakdown</h3></div>
+      <div id="pie-container" style="margin-top:10px;"></div>
+    </div>`;
+
+  const now = new Date();
+  const savedYear = parseInt(sessionStorage.getItem('drwsa_cal_year'), 10);
+  const savedMonth = parseInt(sessionStorage.getItem('drwsa_cal_month'), 10);
+  calYear = Number.isInteger(savedYear) ? savedYear : now.getFullYear();
+  calMonth = Number.isInteger(savedMonth) ? savedMonth : (now.getMonth() + 1);
+
+  document.getElementById('page-content').innerHTML = `
+    <div class="summary-cards">
+      <div class="summary-card" id="card-transactions">
+        <div class="label">Total number of Transactions</div>
+        <div class="value" id="val-transactions">–</div>
+        <span class="delta">All time</span>
+      </div>
+      <div class="summary-card blue" id="card-amount">
+        <div class="label">Total Delivery Cost</div>
+        <div class="value" id="val-amount">–</div>
+        <span class="delta">All time</span>
+      </div>
+      <div class="summary-card teal" id="card-suppliers">
+        <div class="label">Total number of Suppliers</div>
+        <div class="value" id="val-suppliers">–</div>
+        <span class="delta">All time</span>
+      </div>
+    </div>
+
+    <div class="panel panel-outline">
+      <div class="calendar-header">
+        <h2 style="border:none;margin:0;padding:0;">Calendar</h2>
+        <div class="calendar-selects">
+          <select id="sel-month"></select>
+          <select id="sel-year"></select>
+          <button class="btn btn-green" id="download-report-btn" style="margin-left:8px;">Download Monthly Report (XLSX)</button>
+        </div>
+      </div>
+      <div id="calendar-container"></div>
+    </div>
+  `;
+
+  // Each summary card jumps to Analytics, pre-filtered to match what it's summarizing.
+  document.getElementById('card-transactions').onclick = () => window.location.href = '/analytics.html?type=count';
+  document.getElementById('card-amount').onclick = () => window.location.href = '/analytics.html?type=amount';
+  document.getElementById('card-suppliers').onclick = () => window.location.href = '/analytics.html?type=count&showSuppliers=1';
+
+  const monthSel = document.getElementById('sel-month');
+  const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  monthNames.forEach((m, i) => monthSel.innerHTML += `<option value="${i+1}" ${i+1===calMonth?'selected':''}>${m}</option>`);
+  const yearSel = document.getElementById('sel-year');
+  for (let y = now.getFullYear() - 3; y <= now.getFullYear() + 2; y++) {
+    yearSel.innerHTML += `<option value="${y}" ${y===calYear?'selected':''}>${y}</option>`;
+  }
+  monthSel.onchange = () => { calMonth = parseInt(monthSel.value); sessionStorage.setItem('drwsa_cal_month', calMonth); loadCalendar(); };
+  yearSel.onchange = () => { calYear = parseInt(yearSel.value); sessionStorage.setItem('drwsa_cal_year', calYear); loadCalendar(); };
+  document.getElementById('download-report-btn').onclick = () => {
+    window.open(`/api/reports/monthly?year=${calYear}&month=${calMonth}`, '_blank');
+  };
+
+  loadSummary();
+  loadCalendar();
+  loadBreakdown();
+}
+
+async function loadSummary() {
+  try {
+    const s = await api('/dashboard/summary');
+    document.getElementById('val-transactions').textContent = s.totalTransactions;
+    document.getElementById('val-amount').textContent = fmtMoney(s.totalAmount);
+    document.getElementById('val-suppliers').textContent = s.totalSuppliers;
+  } catch (e) { toast(e.message, true); }
+}
+
+async function loadCalendar() {
+  try {
+    const { entries } = await api(`/dashboard/calendar?year=${calYear}&month=${calMonth}`);
+    renderCalendar(calYear, calMonth, entries);
+  } catch (e) { toast(e.message, true); }
+}
+
+function renderCalendar(year, month, entries) {
+  const byDay = {};
+  entries.forEach(e => {
+    const day = parseInt(e.date.split('-')[2]);
+    if (!byDay[day]) byDay[day] = [];
+    byDay[day].push(e);
+  });
+  const first = new Date(year, month - 1, 1);
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const startDow = first.getDay(); // 0 = Sun
+
+  let cells = [];
+  for (let i = 0; i < startDow; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+
+  let rows = '';
+  for (let i = 0; i < cells.length; i += 7) {
+    rows += '<tr>' + cells.slice(i, i + 7).map(d => {
+      if (!d) return '<td></td>';
+      const dayEntries = byDay[d] || [];
+      const entriesHtml = dayEntries.map(e =>
+        `<span class="calendar-entry${e.removed ? ' calendar-entry-removed' : ''}" data-id="${e.id}" title="${e.removed ? 'Removed — click to view reason' : ''}">${escapeHtml(e.supplier_name)}<br/>${escapeHtml(e.transaction_number)}${e.removed ? ' <span class="removed-badge">REMOVED</span>' : ''}</span>`
+      ).join('');
+      return `<td><div class="calendar-day-num">${d}</div>${entriesHtml}</td>`;
+    }).join('') + '</tr>';
+  }
+
+  document.getElementById('calendar-container').innerHTML = `
+    <table class="calendar-table">
+      <thead><tr><th>Sun</th><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+
+  document.querySelectorAll('.calendar-entry').forEach(el => {
+    el.addEventListener('click', () => {
+      window.location.href = `/catalog.html?open=${el.getAttribute('data-id')}`;
+    });
+  });
+}
+
+async function loadBreakdown() {
+  try {
+    const rows = await api('/dashboard/breakdown');
+    const data = rows.map(r => ({ label: r.supplier_name, value: r.amount }));
+    drawPieChart(document.getElementById('pie-container'), data, {
+      size: 220,
+      onSliceClick: (label) => {
+        if (label === 'Others') return; // not a real supplier — nothing to filter by
+        window.location.href = `/catalog.html?supplier=${encodeURIComponent(label)}`;
+      }
+    });
+  } catch (e) { toast(e.message, true); }
+}
+
+init();
+</script>
+</body>
+</html>

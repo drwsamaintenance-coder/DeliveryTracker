@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DRWSA Maintenance | FAQ</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="app-shell" id="shell"></div>
+
+<script src="/js/app.js"></script>
+<script>
+const FAQS = [
+  { q: 'What is the purpose of the DRWSA Maintenance Delivery Tracking System?', a: 'It records, monitors, organizes, and tracks all maintenance delivery transactions. It helps manage suppliers, delivery reports, and transaction records while providing analytical reports and downloadable Excel files.' },
+  { q: 'How do I log in to the system?', a: 'Enter your registered username and password on the login page. Once authenticated, you will be redirected to the Main Dashboard.' },
+  { q: 'How do I log out?', a: 'Click your profile located in the upper-right corner of any page, then select Logout.' },
+  { q: 'How do I add a new delivery transaction?', a: 'Open the Report page, fill in the required delivery information, upload a delivery photo if available (optional), review the information, then click Submit. The system saves the transaction and redirects you to the Catalog page.' },
+  { q: 'What information is required when creating a delivery report?', a: 'Delivery Date, Supplier Name, CTRL Number, Invoice Number, OR Number, Item Name, Quantity, Unit, Price per Unit, Total Amount, Remarks (if applicable), Claimed/Verified By, and an optional delivery photo.' },
+  { q: 'Can I upload pictures of the delivered items?', a: 'Yes. Uploading delivery photos is optional. The system accepts JPEG and PNG image formats.' },
+  { q: 'How does the system group transactions?', a: 'If multiple items share the same CTRL Number, they are grouped under one Transaction Number. If one delivery report has multiple CTRL Numbers from the same supplier, they are combined into one transaction while each CTRL Number is still recorded.' },
+  { q: 'How can I search for a transaction?', a: 'Go to the Catalog page and use the search bar. You can search by Transaction Number, Item Name, Supplier Name, CTRL Number, Invoice Number, or OR Number.' },
+  { q: 'How do I filter transactions?', a: 'In the Catalog page, choose your preferred filter such as Day, Month, Year, or a Custom Date Range. Only matching records will be shown.' },
+  { q: 'How do I view complete transaction details?', a: 'In the Catalog page, click the Action button beside the desired transaction and select Show Data. The complete details, including all delivered items and attached images, will be displayed.' },
+  { q: 'How do I edit a transaction?', a: 'Open the Catalog page, click Action, select Edit Data, enter the verification password, update the information, then save the changes.' },
+  { q: 'Why am I asked for a verification password before editing?', a: 'The verification password protects important transaction records from unauthorized modifications and helps maintain data accuracy.' },
+  { q: 'How do I delete a transaction?', a: 'Go to the Catalog page, click Action, select Delete Data, enter the verification password, then confirm the deletion.' },
+  { q: 'Can deleted transactions be recovered?', a: 'Only authorized administrators can determine whether deleted records are recoverable. Always verify before deleting a transaction.' },
+  { q: 'What does the Main Dashboard display?', a: 'Total Transactions, Total Suppliers, Total Transaction Amount, the Delivery Calendar, and the Transaction Breakdown Pie Chart.' },
+  { q: 'How do I use the Delivery Calendar?', a: 'The calendar shows scheduled deliveries for the selected month and year. Click any supplier name or transaction shown on the calendar to view its complete details in the Catalog page.' },
+  { q: 'How do I view statistical reports?', a: 'Open the Analytics page. You can filter reports by Supplier, Total Amount, Number of Transactions, or Date Range; charts and summaries update automatically.' },
+  { q: 'How do I export reports?', a: 'Navigate to either the Catalog or Analytics page, select your preferred filters, then click the Download XLSX button.' },
+  { q: 'What information is included in the exported Excel report?', a: 'Date Delivered, CTRL Number, Invoice Number, OR Number, Item Name, Quantity, Unit, Amount per Unit, Total Amount, Supplier Name, Remarks, and Claimed/Verified By.' },
+  { q: 'What do the notifications mean?', a: 'Notifications inform you whenever a transaction has been Added, Edited, or Deleted, along with its Transaction Number.' },
+  { q: 'How do I view my activity history?', a: 'Open the User Dashboard. The Activity section shows your Submitted, Edited, and Deleted transactions.' },
+  { q: 'Can multiple computers use the system simultaneously?', a: 'Yes. When connected to the same local network (LAN or Wi-Fi), multiple computers can access the same database — one computer hosts the server and the others connect using its local IP address.' },
+  { q: "Why can't another computer connect to the system?", a: 'Common reasons: the server computer is turned off, both computers are on different networks, the local IP address is incorrect, the database service isn\'t running, or a firewall is blocking the connection.' },
+  { q: 'What should I do if I accidentally enter incorrect information?', a: 'Use the Edit Data option in the Catalog page and enter the verification password to update the incorrect information.' },
+  { q: 'Who should I contact if I experience system problems?', a: 'Contact the system administrator or the DRWSA IT personnel responsible for maintaining the Maintenance Delivery Tracking System.' }
+];
+
+async function init() {
+  await requireLogin();
+  renderShell('faq', 'FAQ');
+
+  document.getElementById('page-content').innerHTML = `
+    <div class="panel">
+      <h2>HELP</h2>
+      <div id="faq-list" style="max-height:520px;overflow-y:auto;padding-right:6px;"></div>
+    </div>
+  `;
+
+  const list = document.getElementById('faq-list');
+  list.innerHTML = FAQS.map((f, i) => `
+    <div class="faq-item" id="faq-${i}">
+      <div class="faq-question" onclick="toggleFaq(${i})">
+        <span>${escapeHtml(f.q)}</span>
+        <span class="chev">⌄</span>
+      </div>
+      <div class="faq-answer">${escapeHtml(f.a)}</div>
+    </div>
+  `).join('');
+}
+
+function toggleFaq(i) {
+  document.getElementById(`faq-${i}`).classList.toggle('open');
+}
+
+init();
+</script>
+</body>
+</html>

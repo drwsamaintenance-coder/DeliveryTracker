@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DRWSA Maintenance | About us</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="app-shell" id="shell"></div>
+
+<script src="/js/app.js"></script>
+<script>
+async function init() {
+  await requireLogin();
+  renderShell('about', 'About us');
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector('.sidebar-footer').classList.add('active');
+
+  document.getElementById('page-content').innerHTML = `
+    <div class="panel" style="text-align:center;">
+      <h2 style="text-align:left;">DRWSA Maintenance</h2>
+      <div id="about-logo" style="margin:0 auto 20px;"></div>
+      <p style="max-width:640px;margin:16px auto;line-height:1.6;">
+        <b>About DRWSA</b><br>
+        The DRWSA Maintenance Delivery Tracking System is a web-based application developed to digitize
+        and simplify the recording, monitoring, and tracking of maintenance delivery transactions.
+        The system enables efficient management of supplier deliveries, transaction records, and reporting
+        while ensuring accurate and organized data storage.
+      </p>
+
+      <p style="max-width:640px;margin:24px auto;line-height:1.6;">
+        👨‍💻 <b>System Developers</b><br>
+        This system was designed and developed by the University of Batangas – Lipa Campus
+        On-the-Job Trainees (OJTs) in collaboration with the DRWSA.<br><br>
+        <b>Development Team</b><br>
+        University of Batangas – Lipa Campus OJT Developers<br>
+        Bachelor of Science in Computer Engineering (BSCpE)
+      </p>
+
+      <div style="display:flex;justify-content:center;gap:40px;flex-wrap:wrap;margin:30px 0;font-size:14px;">
+        <div>🌐 Website: <a href="https://drwsa-commercial.com/" target="_blank" rel="noopener">drwsa-commercial.com</a></div>
+        <div>📧 Email: <a href="mailto:darasaruralwaterworksa@yahoo.com">darasaruralwaterworksa@yahoo.com</a></div>
+        <div>📘 Facebook: <a href="https://www.facebook.com/darasaruralwaterworks/" target="_blank" rel="noopener">Darasa Rural Waterworks and Sanitation Association, Inc.</a></div>
+        <div>📍 Office Location: 907 Darasa, Tanauan City, Batangas</div>
+      </div>
+
+      <hr style="margin:20px 0;border:none;border-top:1px solid #eee;">
+      <p class="muted" style="font-size:12px;">
+        © 2026 DRWSA Maintenance Delivery Tracking System<br>
+        Developed by the University of Batangas – Lipa Campus On-the-Job Trainees in partnership with DRWSA. All Rights Reserved.
+      </p>
+
+      <hr style="margin:20px 0;border:none;border-top:1px solid #eee;">
+      <div style="max-width:360px;margin:0 auto;">
+        <div style="font-weight:600;margin-bottom:8px;">System Logo</div>
+        <p class="muted" style="font-size:12px;margin-bottom:10px;">Upload a PNG or JPEG to replace the default DRWSA logo shown on the login page and sidebar.</p>
+        <input type="file" id="logo-file" accept="image/png,image/jpeg" style="margin-bottom:10px;">
+        <br>
+        <button class="btn btn-blue" id="logo-upload-btn">Upload Logo</button>
+      </div>
+
+      <hr style="margin:20px 0;border:none;border-top:1px solid #eee;">
+      <div style="max-width:360px;margin:0 auto;">
+        <div style="font-weight:600;margin-bottom:8px;">XLSX Report Logo</div>
+        <p class="muted" style="font-size:12px;margin-bottom:10px;">
+          Upload a PNG or JPEG to change the logo shown in the header of every generated Excel file
+          (Delivery Report, Catalog export, Suppliers list, Executive Analytics Report). This is
+          separate from the System Logo above — it only affects downloaded .xlsx files, not the app itself.
+        </p>
+        <div id="xlsx-logo-preview" style="margin-bottom:12px;"></div>
+        <input type="file" id="xlsx-logo-file" accept="image/png,image/jpeg" style="margin-bottom:10px;">
+        <br>
+        <button class="btn btn-blue" id="xlsx-logo-upload-btn">Upload XLSX Report Logo</button>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('logo-upload-btn').onclick = async () => {
+    const fileInput = document.getElementById('logo-file');
+    if (!fileInput.files[0]) { toast('Choose an image first.', true); return; }
+    const fd = new FormData();
+    fd.append('logo', fileInput.files[0]);
+    try {
+      await api('/settings/logo', { method: 'POST', body: fd });
+      toast('Logo updated. Reloading…');
+      setTimeout(() => window.location.reload(), 800);
+    } catch (e) { toast(e.message, true); }
+  };
+
+  document.getElementById('xlsx-logo-upload-btn').onclick = async () => {
+    const fileInput = document.getElementById('xlsx-logo-file');
+    if (!fileInput.files[0]) { toast('Choose an image first.', true); return; }
+    const fd = new FormData();
+    fd.append('logo', fileInput.files[0]);
+    try {
+      await api('/settings/xlsx-logo', { method: 'POST', body: fd });
+      toast('XLSX report logo updated.');
+      fileInput.value = '';
+      loadAboutLogo();
+    } catch (e) { toast(e.message, true); }
+  };
+
+  loadAboutLogo();
+}
+
+async function loadAboutLogo() {
+  try {
+    const { logoUrl, xlsxLogoUrl } = await api('/settings');
+    const el = document.getElementById('about-logo');
+    if (logoUrl) {
+      el.innerHTML = `<img src="${logoUrl}" alt="DRWSA logo" style="width:220px;height:220px;object-fit:contain;">`;
+    }
+    const xlsxEl = document.getElementById('xlsx-logo-preview');
+    if (xlsxEl && xlsxLogoUrl) {
+      xlsxEl.innerHTML = `<img src="${xlsxLogoUrl}?t=${Date.now()}" alt="XLSX report logo" style="width:100px;height:100px;object-fit:contain;border:1px solid #eee;border-radius:6px;padding:6px;">`;
+    }
+  } catch (e) { /* keep blank */ }
+}
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DRWSA Maintenance | User Profile</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="app-shell" id="shell"></div>
+
+<script src="/js/app.js"></script>
+<script>
+let editing = false;
+let userData = null;
+
+async function init() {
+  userData = await requireLogin();
+  renderShell('user', 'User Profile');
+  renderProfile();
+  loadActivity();
+}
+
+function avatarHtml() {
+  if (userData.avatar_path) {
+    return `<img src="${userData.avatar_path}" style="width:80px;height:80px;border-radius:50%;object-fit:cover;border:2px solid #1c3b6e;">`;
+  }
+  return `<div style="width:80px;height:80px;border-radius:50%;background:#e8eaed;display:flex;align-items:center;justify-content:center;border:2px solid #1c3b6e;font-size:34px;">☺</div>`;
+}
+
+function renderProfile() {
+  document.getElementById('page-content').innerHTML = `
+    <div class="panel">
+      <div class="flex-between">
+        <h2 style="border:none;padding:0;margin:0;">Personal Details</h2>
+        <button class="btn ${editing ? 'btn-gray' : 'btn-blue'}" id="edit-toggle-btn">${editing ? 'Cancel' : 'Edit Details'}</button>
+      </div>
+      <div style="display:flex;gap:24px;align-items:center;margin:22px 0;">
+        <div style="position:relative;">
+          ${avatarHtml()}
+          ${editing ? `<button class="btn btn-gray" id="avatar-btn" style="position:absolute;bottom:-6px;left:50%;transform:translateX(-50%);padding:3px 10px;font-size:10px;">Change</button>
+          <input type="file" id="avatar-file" accept="image/png,image/jpeg" style="display:none;">` : ''}
+        </div>
+        <div id="name-position-block"></div>
+      </div>
+
+      <div style="margin-bottom:10px;font-weight:600;">Contact Details</div>
+      <div id="contact-block" style="border:1px solid #ccc;border-radius:14px;padding:16px;margin-bottom:24px;max-width:420px;"></div>
+
+      ${editing ? `
+      <div style="margin-bottom:10px;font-weight:600;">Account Credentials</div>
+      <div style="border:1px solid #ccc;border-radius:14px;padding:16px;margin-bottom:20px;max-width:420px;">
+        <p class="muted" style="font-size:11px;margin-top:-2px;">Leave the password fields blank to keep your current password. Your current password is required to confirm any change here.</p>
+        <div class="field" style="margin-bottom:8px;"><label>Username</label><input class="pill-input" id="f-username" value="${escapeHtml(userData.username || '')}"></div>
+        <div class="field" style="margin-bottom:8px;"><label>New Password</label><input class="pill-input" type="password" id="f-new-password" placeholder="Leave blank to keep current"></div>
+        <div class="field" style="margin-bottom:8px;"><label>Confirm New Password</label><input class="pill-input" type="password" id="f-new-password-confirm"></div>
+        <div class="field"><label>Current Password</label><input class="pill-input" type="password" id="f-current-password" placeholder="Required to save credential changes"></div>
+      </div>
+      <div style="text-align:right;margin-bottom:20px;"><button class="btn btn-green" id="save-btn">Save Changes</button></div>
+      ` : ''}
+
+      <div style="font-weight:600;margin-bottom:10px;">Activity</div>
+      <div style="border:1px solid #ccc;border-radius:14px;overflow:hidden;">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;">
+          <div style="padding:16px;border-right:1px solid #ddd;text-align:center;">
+            <div class="muted" style="font-size:12px;">Submitted Data</div>
+            <div style="font-size:26px;font-weight:700;" id="stat-submitted">–</div>
+          </div>
+          <div style="padding:16px;border-right:1px solid #ddd;text-align:center;">
+            <div class="muted" style="font-size:12px;">Removed Data</div>
+            <div style="font-size:26px;font-weight:700;" id="stat-deleted">–</div>
+          </div>
+          <div style="padding:16px;text-align:center;">
+            <div class="muted" style="font-size:12px;">Edited Data</div>
+            <div style="font-size:26px;font-weight:700;" id="stat-edited">–</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="font-weight:600;margin:20px 0 10px;">Recent Activity Log</div>
+      <table class="data-table">
+        <thead><tr><th>Action</th><th>Transaction Number</th><th>When</th></tr></thead>
+        <tbody id="activity-log-body"></tbody>
+      </table>
+
+      ${userData.role === 'admin' ? `
+      <div style="font-weight:600;margin:28px 0 10px;">Accounts (Admin)</div>
+      <p class="muted" style="font-size:11px;margin-top:-6px;">As an admin, you can create new staff or admin accounts.</p>
+      <div style="border:1px solid #ccc;border-radius:14px;padding:16px;margin-bottom:16px;max-width:520px;">
+        <div class="field-grid">
+          <div class="field"><label>Full Name</label><input class="pill-input" id="na-name"></div>
+          <div class="field"><label>Position</label><input class="pill-input" id="na-position"></div>
+          <div class="field"><label>Username</label><input class="pill-input" id="na-username"></div>
+          <div class="field"><label>Password</label><input class="pill-input" type="password" id="na-password"></div>
+          <div class="field">
+            <label>Role</label>
+            <select class="pill-input" id="na-role">
+              <option value="staff">Staff</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+        </div>
+        <div style="text-align:right;">
+          <button class="btn btn-blue" id="create-account-btn">Create Account</button>
+        </div>
+      </div>
+      <table class="data-table">
+        <thead><tr><th>Name</th><th>Username</th><th>Position</th><th>Role</th><th>Action</th></tr></thead>
+        <tbody id="accounts-body"></tbody>
+      </table>
+
+      <div style="font-weight:600;margin:28px 0 10px;color:#b3261e;">Danger Zone</div>
+      <div style="border:1px solid #f2b8b5;background:#fdecea;border-radius:14px;padding:16px;max-width:520px;">
+        <p style="font-size:12px;margin:0 0 10px;color:#5f2120;">
+          This permanently deletes <b>every transaction/report on file</b> and resets the transaction number
+          counter, so the next report starts fresh at <b>DRWSA01</b>. This cannot be undone — there is no backup
+          to restore from. Only do this if you're intentionally starting the system over from zero.
+        </p>
+        <div class="field" style="margin-bottom:8px;">
+          <label>Type <code>DELETE ALL DATA</code> to confirm</label>
+          <input class="pill-input" id="clear-confirm-phrase" placeholder="DELETE ALL DATA">
+        </div>
+        <div class="field" style="margin-bottom:12px;">
+          <label>Verification Password</label>
+          <input class="pill-input" type="password" id="clear-verification-password">
+        </div>
+        <button class="btn btn-red" id="clear-all-btn">Delete All Transaction Data</button>
+      </div>
+      ` : ''}
+    </div>
+  `;
+
+  if (editing) {
+    document.getElementById('name-position-block').innerHTML = `
+      <div class="field"><label>Full Name</label><input class="pill-input" id="f-name" value="${escapeHtml(userData.name)}"></div>
+      <div class="field" style="margin-top:8px;"><label>Position</label><input class="pill-input" id="f-position" value="${escapeHtml(userData.position || '')}"></div>
+    `;
+    document.getElementById('contact-block').innerHTML = `
+      <div class="field" style="margin-bottom:8px;"><label>Phone number</label><input class="pill-input" id="f-phone" value="${escapeHtml(userData.phone || '')}"></div>
+      <div class="field" style="margin-bottom:8px;"><label>Email</label><input class="pill-input" id="f-email" value="${escapeHtml(userData.email || '')}"></div>
+      <div class="field"><label>Address</label><input class="pill-input" id="f-address" value="${escapeHtml(userData.address || '')}"></div>
+    `;
+    document.getElementById('save-btn').onclick = saveProfile;
+    document.getElementById('avatar-btn').onclick = () => document.getElementById('avatar-file').click();
+    document.getElementById('avatar-file').onchange = uploadAvatar;
+  } else {
+    document.getElementById('name-position-block').innerHTML = `
+      <div style="font-size:18px;font-weight:700;">${escapeHtml(userData.name)}</div>
+      <div class="muted">${escapeHtml(userData.position || '')}</div>
+    `;
+    document.getElementById('contact-block').innerHTML = `
+      <div>Phone number : ${escapeHtml(userData.phone || '—')}</div>
+      <div>Email : ${escapeHtml(userData.email || '—')}</div>
+      <div>Address : ${escapeHtml(userData.address || '—')}</div>
+    `;
+  }
+
+  document.getElementById('edit-toggle-btn').onclick = () => { editing = !editing; renderProfile(); };
+
+  if (userData.role === 'admin') {
+    document.getElementById('create-account-btn').onclick = createAccount;
+    document.getElementById('clear-all-btn').onclick = clearAllData;
+    loadAccounts();
+  }
+}
+
+async function clearAllData() {
+  const confirmPhrase = document.getElementById('clear-confirm-phrase').value;
+  const verificationPassword = document.getElementById('clear-verification-password').value;
+  if (confirmPhrase !== 'DELETE ALL DATA') {
+    toast('Type "DELETE ALL DATA" exactly to confirm.', true);
+    return;
+  }
+  if (!verificationPassword) {
+    toast('Enter the verification password.', true);
+    return;
+  }
+  if (!confirm('This will permanently delete every transaction/report on file and cannot be undone. Are you absolutely sure?')) return;
+
+  try {
+    const result = await api('/transactions/clear-all', { method: 'POST', body: { verificationPassword, confirmPhrase } });
+    toast(`Deleted ${result.deletedCount} transaction(s). Starting fresh.`);
+    document.getElementById('clear-confirm-phrase').value = '';
+    document.getElementById('clear-verification-password').value = '';
+    loadActivity();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function createAccount() {
+  const body = {
+    name: document.getElementById('na-name').value.trim(),
+    position: document.getElementById('na-position').value.trim(),
+    username: document.getElementById('na-username').value.trim(),
+    password: document.getElementById('na-password').value,
+    role: document.getElementById('na-role').value
+  };
+  if (!body.name || !body.username || !body.password) { toast('Name, username, and password are required.', true); return; }
+  try {
+    await api('/users', { method: 'POST', body });
+    toast('Account created.');
+    document.getElementById('na-name').value = '';
+    document.getElementById('na-position').value = '';
+    document.getElementById('na-username').value = '';
+    document.getElementById('na-password').value = '';
+    loadAccounts();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function loadAccounts() {
+  try {
+    const users = await api('/users');
+    document.getElementById('accounts-body').innerHTML = users.map(u => `
+      <tr>
+        <td>${escapeHtml(u.name)}</td>
+        <td>${escapeHtml(u.username)}</td>
+        <td>${escapeHtml(u.position || '')}</td>
+        <td style="text-transform:capitalize;">${escapeHtml(u.role)}</td>
+        <td>${u.id === userData.id ? '<span class="muted" style="font-size:11px;">(you)</span>' : `<button class="btn btn-red" style="padding:5px 10px;font-size:12px;" onclick="deleteAccount('${u.id}', '${escapeHtml(u.name).replace(/'/g, "\\'")}')">Delete</button>`}</td>
+      </tr>`).join('');
+  } catch (e) { /* ignore */ }
+}
+
+async function deleteAccount(id, name) {
+  if (!confirm(`Delete the account for "${name}"? This cannot be undone.`)) return;
+  try {
+    await api(`/users/${id}`, { method: 'DELETE' });
+    toast('Account deleted.');
+    loadAccounts();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function uploadAvatar() {
+  const fileInput = document.getElementById('avatar-file');
+  if (!fileInput.files[0]) return;
+  const fd = new FormData();
+  fd.append('avatar', fileInput.files[0]);
+  try {
+    const result = await api('/users/me/avatar', { method: 'POST', body: fd });
+    userData.avatar_path = result.avatar_path;
+    window.currentUser = userData;
+    toast('Profile picture updated.');
+    renderProfile();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function saveProfile() {
+  const body = {
+    name: document.getElementById('f-name').value.trim(),
+    position: document.getElementById('f-position').value.trim(),
+    phone: document.getElementById('f-phone').value.trim(),
+    email: document.getElementById('f-email').value.trim(),
+    address: document.getElementById('f-address').value.trim()
+  };
+
+  const newUsername = document.getElementById('f-username').value.trim();
+  const newPassword = document.getElementById('f-new-password').value;
+  const newPasswordConfirm = document.getElementById('f-new-password-confirm').value;
+  const currentPassword = document.getElementById('f-current-password').value;
+  const usernameChanged = newUsername && newUsername !== userData.username;
+  const wantsCredentialChange = usernameChanged || newPassword || newPasswordConfirm;
+
+  if (wantsCredentialChange) {
+    if (newPassword && newPassword !== newPasswordConfirm) {
+      toast('New password and confirmation do not match.', true);
+      return;
+    }
+    if (newPassword && newPassword.length < 6) {
+      toast('New password must be at least 6 characters.', true);
+      return;
+    }
+    if (!currentPassword) {
+      toast('Enter your current password to change your username or password.', true);
+      return;
+    }
+  }
+
+  try {
+    userData = await api('/users/me', { method: 'PUT', body });
+
+    if (wantsCredentialChange) {
+      userData = await api('/users/me/credentials', {
+        method: 'PUT',
+        body: { currentPassword, newUsername: usernameChanged ? newUsername : undefined, newPassword: newPassword || undefined }
+      });
+    }
+
+    window.currentUser = userData;
+    editing = false;
+    toast('Profile updated.');
+    renderProfile();
+    document.getElementById('profile-name').textContent = userData.name;
+  } catch (e) { toast(e.message, true); }
+}
+
+async function loadActivity() {
+  try {
+    const a = await api('/users/me/activity');
+    document.getElementById('stat-submitted').textContent = a.submitted;
+    document.getElementById('stat-deleted').textContent = a.deleted;
+    document.getElementById('stat-edited').textContent = a.edited;
+    const body = document.getElementById('activity-log-body');
+    if (!a.log.length) {
+      body.innerHTML = `<tr><td colspan="3" class="empty-state">No activity yet.</td></tr>`;
+    } else {
+      body.innerHTML = a.log.map(l => `
+        <tr>
+          <td style="text-transform:capitalize;">${escapeHtml(l.action)}</td>
+          <td>${escapeHtml(l.transaction_number || '—')}</td>
+          <td>${escapeHtml(l.timestamp)}</td>
+        </tr>`).join('');
+    }
+  } catch (e) { toast(e.message, true); }
+}
+
+init();
+</script>
+</body>
+</html>

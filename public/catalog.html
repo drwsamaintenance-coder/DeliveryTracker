@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DRWSA Maintenance | Catalog</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="app-shell" id="shell"></div>
+
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal-box" id="modal-box"></div>
+</div>
+
+<script src="/js/app.js"></script>
+<script>
+let currentPage = 1;
+let currentFilters = {};
+let openMenuId = null;
+
+function todayStr() { return new Date().toISOString().slice(0,10); }
+
+async function init() {
+  await requireLogin();
+  renderShell('catalog', 'Catalog Dashboard');
+
+  document.getElementById('page-content').innerHTML = `
+    <div class="panel">
+      <div class="flex-between" style="flex-wrap:wrap;gap:10px;">
+        <h2 style="border:none;padding:0;margin:0;">Transaction History</h2>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <input type="text" id="f-from" class="pill-input" style="width:150px;">
+          <span>to</span>
+          <input type="text" id="f-to" class="pill-input" style="width:150px;" value="${isoToMDY(todayStr())}">
+          <input type="text" id="f-search" class="pill-input" style="width:280px;" placeholder="Search by supplier, CTRL/OR/Invoice number, item, or transaction number">
+          <button class="btn btn-blue" id="search-btn">Search 🔍</button>
+        </div>
+      </div>
+      <hr style="margin:16px 0;border:none;border-top:2px solid #eee;">
+
+      <div style="overflow-x:auto;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Transaction Number</th><th>Date</th><th>Supplier Name</th>
+              <th>CTRL/Invoice/OR number</th><th>Total Amount</th><th>Remarks</th>
+              <th>Received/Checked by</th><th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="catalog-tbody"></tbody>
+        </table>
+      </div>
+
+      <div class="flex-between" style="margin-top:16px;">
+        <div id="pagination"></div>
+        <button class="btn btn-green" id="download-btn">Download XLSX</button>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('search-btn').onclick = () => { currentPage = 1; loadCatalog(); };
+  document.getElementById('download-btn').onclick = downloadXlsx;
+  attachDateMask(document.getElementById('f-from'));
+  attachDateMask(document.getElementById('f-to'));
+  // Search live as you type — no need to click the search icon.
+  document.getElementById('f-search').addEventListener('input', () => {
+    clearTimeout(window.__searchDebounce);
+    window.__searchDebounce = setTimeout(() => { currentPage = 1; loadCatalog(); }, 300);
+  });
+
+  loadCatalog();
+
+  const params = new URLSearchParams(window.location.search);
+  const openId = params.get('open');
+  if (openId) showData(openId);
+  const supplier = params.get('supplier');
+  if (supplier) { document.getElementById('f-search').value = supplier; loadCatalog(); }
+}
+
+function collectFilters() {
+  return {
+    from: mdyToISO(document.getElementById('f-from').value),
+    to: mdyToISO(document.getElementById('f-to').value),
+    q: document.getElementById('f-search').value.trim(),
+  };
+}
+
+function buildQuery(filters, extra = {}) {
+  const q = new URLSearchParams({ ...filters, ...extra });
+  [...q.keys()].forEach(k => { if (!q.get(k)) q.delete(k); });
+  return q.toString();
+}
+
+async function loadCatalog() {
+  currentFilters = collectFilters();
+  try {
+    const result = await api(`/transactions?${buildQuery(currentFilters, { page: currentPage })}`);
+    const body = document.getElementById('catalog-tbody');
+    if (!result.data.length) {
+      body.innerHTML = `<tr><td colspan="8" class="empty-state">No transactions found.</td></tr>`;
+    } else {
+      body.innerHTML = result.data.map(t => `
+        <tr style="${t.removed ? 'opacity:0.55;' : ''}">
+          <td>${escapeHtml(t.transaction_number)} ${t.removed ? '<span class="removed-badge">REMOVED</span>' : ''}</td>
+          <td>${escapeHtml(formatDate(t.date))}</td>
+          <td>${escapeHtml(t.supplier_name)}</td>
+          <td>${escapeHtml(t.ctrl_numbers)}</td>
+          <td>${fmtMoney(t.total_amount)}</td>
+          <td>${escapeHtml(t.remarks || '')}</td>
+          <td>${escapeHtml(t.received_by || '')}</td>
+          <td>
+            <button class="btn btn-blue" style="padding:6px 14px;" onclick="showData('${t.id}')">View</button>
+          </td>
+        </tr>
+      `).join('');
+    }
+    renderPagination(result.page, result.totalPages);
+  } catch (e) { toast(e.message, true); }
+}
+
+function renderPagination(page, totalPages) {
+  let html = '';
+  for (let p = 1; p <= totalPages; p++) {
+    if (p > 8 && p !== totalPages && Math.abs(p - page) > 2) { if (p === page + 3) html += '…'; continue; }
+    html += `<button class="btn ${p === page ? 'btn-blue' : 'btn-gray'}" style="padding:6px 12px;margin-right:4px;" onclick="gotoPage(${p})">${p}</button>`;
+  }
+  document.getElementById('pagination').innerHTML = `Page: ${html}`;
+}
+
+function gotoPage(p) { currentPage = p; loadCatalog(); }
+
+function downloadXlsx() {
+  const filters = collectFilters();
+  window.open(`/api/transactions/export/xlsx?${buildQuery(filters, {})}`, '_blank');
+}
+
+// ---------- Show Data Modal ----------
+async function showData(id) {
+  try {
+    const t = await api(`/transactions/${id}`);
+    const itemsRows = t.items.map(it => `
+      <tr>
+        <td>${escapeHtml(it.ctrl_number || t.ctrl_numbers)}</td>
+        <td>${escapeHtml(it.item_name)}</td>
+        <td>${it.quantity}</td>
+        <td>${escapeHtml(it.unit || '')}</td>
+        <td>${fmtMoney(it.price_per_unit)}</td>
+        <td>${fmtMoney(it.total_amount)}</td>
+        <td>${it.photo_path ? `<a href="${it.photo_path}" target="_blank">View</a>` : '—'}</td>
+      </tr>`).join('');
+
+    openModal(`
+      <h2>${escapeHtml(t.transaction_number)} ${t.removed ? '<span class="removed-badge">REMOVED</span>' : ''}</h2>
+      ${t.removed ? `
+        <div class="removed-banner">
+          <b>This transaction was removed.</b><br>
+          <b>Reason:</b> ${escapeHtml(t.removed_reason || '—')}<br>
+          <b>Removed by:</b> ${escapeHtml(t.removed_by_name || '—')} on ${escapeHtml((t.removed_at || '').replace('T', ' '))}
+        </div>
+      ` : ''}
+      <div class="field-grid">
+        <div><b>Date:</b> ${escapeHtml(formatDate(t.date))}</div>
+        <div><b>Supplier:</b> ${escapeHtml(t.supplier_name)}</div>
+        <div><b>CTRL/Invoice/OR #:</b> ${escapeHtml(t.ctrl_numbers)}</div>
+        <div><b>Total Amount:</b> ${fmtMoney(t.total_amount)}</div>
+        <div><b>Remarks:</b> ${escapeHtml(t.remarks || '—')}</div>
+        <div><b>Received/Checked by:</b> ${escapeHtml(t.received_by || '—')}</div>
+        <div><b>Encoded by:</b> ${escapeHtml(t.created_by_name || '—')}</div>
+      </div>
+      <table class="data-table">
+        <thead><tr><th>CTRL#</th><th>Item</th><th>Qty</th><th>Unit</th><th>Amount/Unit</th><th>Total</th><th>Photo</th></tr></thead>
+        <tbody>${itemsRows}</tbody>
+      </table>
+      <div style="margin-top:16px;display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-gray" onclick="window.open('/api/transactions/${t.id}/export/xlsx','_blank')">Download XLSX</button>
+        ${t.removed ? '' : `
+          <button class="btn btn-red" onclick="openDeleteModal('${t.id}')">Delete</button>
+          <button class="btn btn-blue" onclick="openEditModal('${t.id}')">Edit</button>
+        `}
+        <button class="btn btn-gray" onclick="closeModal()">Back</button>
+      </div>
+    `);
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---------- Edit Modal (requires verification password) ----------
+async function openEditModal(id) {
+  openModal(`
+    <div class="modal-close-row"><button class="btn btn-gray" onclick="closeModal()">Close ✕</button></div>
+    <h2>Verify to Edit</h2>
+    <div class="field">
+      <label>Verification Password</label>
+      <input type="password" class="pill-input" id="edit-pass">
+    </div>
+    <div style="margin-top:16px;text-align:right;">
+      <button class="btn btn-blue" onclick="loadEditForm('${id}')">Verify</button>
+    </div>
+  `);
+}
+
+async function loadEditForm(id) {
+  const pass = document.getElementById('edit-pass').value;
+  try {
+    const t = await api(`/transactions/${id}`);
+    const itemRows = t.items.map((it, i) => `
+      <tr data-idx="${i}">
+        <td><input class="e-ctrl enter-nav" value="${escapeHtml(it.ctrl_number || '')}"></td>
+        <td><input class="e-item enter-nav" value="${escapeHtml(it.item_name)}"></td>
+        <td><input class="e-qty enter-nav" type="number" value="${it.quantity}"></td>
+        <td><input class="e-unit enter-nav" value="${escapeHtml(it.unit || '')}"></td>
+        <td><input class="e-price enter-nav" type="number" value="${it.price_per_unit}"></td>
+      </tr>`).join('');
+
+    openModal(`
+      <div class="modal-close-row"><button class="btn btn-gray" onclick="closeModal()">Close ✕</button></div>
+      <h2>Edit ${escapeHtml(t.transaction_number)}</h2>
+      <div class="field-grid">
+        <div class="field"><label>Date</label><input class="pill-input enter-nav" id="e-date" type="text" value="${isoToMDY(t.date)}"></div>
+        <div class="field"><label>Supplier</label><input class="pill-input enter-nav" id="e-supplier" value="${escapeHtml(t.supplier_name)}"></div>
+        <div class="field"><label>Remarks</label><input class="pill-input enter-nav" id="e-remarks" value="${escapeHtml(t.remarks || '')}"></div>
+        <div class="field"><label>Received/Checked by</label><input class="pill-input enter-nav" id="e-received" value="${escapeHtml(t.received_by || '')}"></div>
+      </div>
+      <table class="data-table">
+        <thead><tr><th>CTRL#</th><th>Item</th><th>Qty</th><th>Unit</th><th>Price</th></tr></thead>
+        <tbody id="edit-items-body">${itemRows}</tbody>
+      </table>
+      <div style="margin-top:16px;text-align:right;">
+        <button class="btn btn-green" id="save-edit-btn" onclick="saveEdit('${id}', '${pass.replace(/'/g, "\\'")}')">Save Changes</button>
+      </div>
+    `);
+    enableEnterNav(document.getElementById('modal-box'), () => document.getElementById('save-edit-btn')?.click());
+    attachDateMask(document.getElementById('e-date'));
+  } catch (e) { toast(e.message, true); }
+}
+
+async function saveEdit(id, verificationPassword) {
+  const items = [...document.querySelectorAll('#edit-items-body tr')].map(tr => ({
+    ctrl_number: tr.querySelector('.e-ctrl').value,
+    item_name: tr.querySelector('.e-item').value,
+    quantity: tr.querySelector('.e-qty').value,
+    unit: tr.querySelector('.e-unit').value,
+    price_per_unit: tr.querySelector('.e-price').value
+  }));
+  const body = {
+    verificationPassword,
+    date: mdyToISO(document.getElementById('e-date').value),
+    supplier_name: document.getElementById('e-supplier').value,
+    remarks: document.getElementById('e-remarks').value,
+    received_by: document.getElementById('e-received').value,
+    items
+  };
+  try {
+    await api(`/transactions/${id}`, { method: 'PUT', body });
+    toast('Transaction updated.');
+    closeModal();
+    loadCatalog();
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---------- Delete Modal ----------
+function openDeleteModal(id) {
+  openModal(`
+    <div class="modal-close-row"><button class="btn btn-gray" onclick="closeModal()">Close ✕</button></div>
+    <h2>Verify to Remove</h2>
+    <p class="muted">This transaction will be marked as removed and excluded from totals and reports — it stays on file and can still be opened for audit. A reason is required.</p>
+    <div class="field" style="margin-bottom:12px;">
+      <label>Reason for removal (required)</label>
+      <input type="text" class="pill-input" id="delete-reason" placeholder="e.g. Duplicate entry, wrong supplier, data entry error">
+    </div>
+    <div class="field">
+      <label>Verification Password</label>
+      <input type="password" class="pill-input" id="delete-pass">
+    </div>
+    <div style="margin-top:16px;text-align:right;">
+      <button class="btn btn-red" onclick="confirmDelete('${id}')">Remove</button>
+    </div>
+  `);
+}
+
+async function confirmDelete(id) {
+  const pass = document.getElementById('delete-pass').value;
+  const reason = document.getElementById('delete-reason').value.trim();
+  if (!reason) { toast('Please enter a reason for removing this transaction.', true); return; }
+  try {
+    await api(`/transactions/${id}`, { method: 'DELETE', body: { verificationPassword: pass, reason } });
+    toast('Transaction removed.');
+    closeModal();
+    loadCatalog();
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---------- Modal helpers ----------
+function openModal(html) {
+  document.getElementById('modal-box').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('open');
+}
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('open');
+}
+document.getElementById('modal-overlay')?.addEventListener('click', (e) => {
+  if (e.target.id === 'modal-overlay') closeModal();
+});
+
+init();
+</script>
+</body>
+</html>

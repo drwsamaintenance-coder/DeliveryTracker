@@ -1,0 +1,19 @@
+# Render.com deployment config. Once this repo is connected in the Render
+# dashboard (New > Blueprint > pick this GitHub repo), Render reads this file
+# automatically and sets everything up — you'll just need to fill in the two
+# secret values it prompts for (FIREBASE_SERVICE_ACCOUNT_JSON and
+# SESSION_SECRET) since those can't be committed to GitHub.
+services:
+  - type: web
+    name: drwsa-maintenance
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SESSION_SECRET
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
