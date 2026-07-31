@@ -20,11 +20,21 @@ const DEFAULT_XLSX_LOGO_PATH = path.join(UPLOADS_DIR, 'xlsx-logo-official.png');
 async function getXlsxLogoPath() {
   try {
     const snap = await db.collection('settings').doc('xlsx_logo_path').get();
-    const url = snap.exists ? snap.data().value : null; // e.g. '/uploads/xlsx-logo-169....png'
-    if (url) {
-      const rel = url.replace(/^\/?uploads\//, '');
-      const abs = path.join(UPLOADS_DIR, rel);
-      if (fs.existsSync(abs)) return abs;
+    if (snap.exists) {
+      const { value: url, data } = snap.data();
+      if (url) {
+        const rel = url.replace(/^\/?uploads\//, '');
+        const abs = path.join(UPLOADS_DIR, rel);
+        // Ephemeral hosts (e.g. Render) wipe local disk on every
+        // redeploy/restart, so the file this Firestore doc points to may no
+        // longer physically exist even though the doc itself is fine. If we
+        // still have the base64 bytes on the doc, rebuild the file on the
+        // spot before handing the path to ExcelJS.
+        if (!fs.existsSync(abs) && data) {
+          try { fs.writeFileSync(abs, Buffer.from(data, 'base64')); } catch (e) { /* fall through */ }
+        }
+        if (fs.existsSync(abs)) return abs;
+      }
     }
   } catch (e) { /* fall through to the bundled default */ }
   return fs.existsSync(DEFAULT_XLSX_LOGO_PATH) ? DEFAULT_XLSX_LOGO_PATH : null;
