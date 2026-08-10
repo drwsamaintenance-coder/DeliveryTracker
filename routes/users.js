@@ -2,16 +2,18 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
 const { db } = require('../db/init');
 const { requireAuth, requireAdmin } = require('./utils');
-const { uploadBuffer } = require('./fileStorage');
 
-// memoryStorage — see the comment in transactions.js / fileStorage.js for
-// why: local disk (the old diskStorage target) is wiped on every Render
-// restart, which was silently deleting avatar photos the same way it was
-// deleting logos and delivery photos.
+const uploadDir = path.join(__dirname, '../public/uploads');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => cb(null, 'avatar-' + req.session.userId + '-' + Date.now() + path.extname(file.originalname))
+});
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage,
   fileFilter: (req, file, cb) => {
     const ok = ['image/jpeg', 'image/png'].includes(file.mimetype);
     cb(ok ? null : new Error('Only JPEG/PNG photos are allowed.'), ok);
@@ -122,13 +124,12 @@ router.put('/me/credentials', requireAuth, async (req, res) => {
 router.post('/me/avatar', requireAuth, upload.single('avatar'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No image uploaded.' });
-    const destPath = 'uploads/avatar-' + req.user.id + '-' + Date.now() + path.extname(req.file.originalname);
-    const url = await uploadBuffer(req.file.buffer, destPath, req.file.mimetype);
+    const url = '/uploads/' + req.file.filename;
     await db.collection('users').doc(req.user.id).update({ avatar_path: url });
     res.json({ avatar_path: url });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: e.message || 'Could not save your photo.' });
+    res.status(500).json({ error: 'Could not save your photo.' });
   }
 });
 
