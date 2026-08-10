@@ -2,20 +2,20 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
 const ExcelJS = require('exceljs');
 const { db } = require('../db/init');
 const { requireAuth, requireAdmin, nextTransactionNumber, logActivity, pushNotification, formatDateMDY } = require('./utils');
 const { buildDeliveryReportSheet } = require('./xlsxTemplate');
-const { uploadBuffer } = require('./fileStorage');
 
-// memoryStorage: keeps each uploaded photo as a Buffer (req.file.buffer)
-// instead of writing it to local disk, which is ephemeral on hosts like
-// Render — the same reason the logo uploads kept disappearing. Delivery
-// item photos are proof-of-delivery evidence, so losing them silently on
-// every restart was actually the more serious version of that bug. Each
-// photo now gets uploaded to Cloud Storage (see fileStorage.js) instead.
+const uploadDir = path.join(__dirname, '../public/uploads');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => cb(null, Date.now() + '-' + Math.round(Math.random() * 1e9) + path.extname(file.originalname))
+});
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage,
   fileFilter: (req, file, cb) => {
     const ok = ['image/jpeg', 'image/png'].includes(file.mimetype);
     cb(ok ? null : new Error('Only JPEG/PNG photos are allowed.'), ok);
@@ -230,12 +230,10 @@ router.post('/', requireAuth, upload.any(), async (req, res) => {
 async function handleTransactionSubmit(req, res, rows, idempotencyKey) {
   try {
     const filesByIndex = {};
-    for (const f of (req.files || [])) {
+    (req.files || []).forEach(f => {
       const m = f.fieldname.match(/photo_(\d+)/);
-      if (!m) continue;
-      const destPath = 'uploads/' + Date.now() + '-' + Math.round(Math.random() * 1e9) + path.extname(f.originalname);
-      filesByIndex[m[1]] = await uploadBuffer(f.buffer, destPath, f.mimetype);
-    }
+      if (m) filesByIndex[m[1]] = '/uploads/' + f.filename;
+    });
 
     const groups = {};
     rows.forEach((row, idx) => {
