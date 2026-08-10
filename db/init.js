@@ -38,40 +38,12 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
   process.exit(1);
 }
 
-// Cloud Storage bucket for uploaded files (logos, delivery item photos).
-//
-// IMPORTANT — why this exists: on Render (and most cloud hosts), the local
-// filesystem is EPHEMERAL. Anything written to disk at runtime (which is
-// what multer + `public/uploads/` used to do) is wiped whenever the
-// container restarts — and Render's free/starter tier restarts it after
-// ~15 minutes of inactivity. That's exactly why uploaded logos and delivery
-// photos were disappearing after 20 minutes to an hour: the file survived
-// until the container recycled, then it was gone, even though the Firestore
-// record still pointed at it. Cloud Storage is a separate, persistent
-// service, so files uploaded here survive restarts and redeploys.
-//
-// This does require Cloud Storage to be enabled for your Firebase project —
-// a one-time step, separate from enabling Firestore (same category of setup
-// step as the Firestore Database creation you already did). In Firebase
-// Console: Build > Storage > Get started. If it's not enabled, uploads will
-// fail with a clear "bucket does not exist" error rather than silently
-// losing files.
-//
-// The bucket name defaults to the classic `<project-id>.appspot.com` — if
-// your project's bucket has a different name (Firebase Console > Storage
-// shows it at the top, e.g. `<project-id>.firebasestorage.app` for newer
-// projects), set FIREBASE_STORAGE_BUCKET to override it.
-const bucketName = process.env.FIREBASE_STORAGE_BUCKET || `${serviceAccount.project_id}.appspot.com`;
-
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  storageBucket: bucketName
+  credential: admin.credential.cert(serviceAccount)
 });
 
 const db = admin.firestore();
 db.settings({ ignoreUndefinedProperties: true });
-
-const bucket = admin.storage().bucket();
 
 const FieldValue = admin.firestore.FieldValue;
 
@@ -130,4 +102,4 @@ const ready = seedIfEmpty().catch(err => {
   process.exit(1);
 });
 
-module.exports = { db, admin, FieldValue, ready, bucket };
+module.exports = { db, admin, FieldValue, ready };
