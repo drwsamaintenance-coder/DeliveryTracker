@@ -7,7 +7,7 @@ const { requireAuth, formatDateMDY, groupTopNWithOthers } = require('./utils');
 const { getAllTransactions, filterTransactions } = require('./dataAccess');
 const {
   applyLetterhead, styleTableHeaderRow, fillCell, setVal, applyOuterBorder,
-  NAVY, LIGHTBLUE, GREY, ZEBRA, WHITE, TOTAL_BLUE, GOLD, FONT_NAME, peso, getXlsxLogoPath
+  NAVY, LIGHTBLUE, GREY, ZEBRA, WHITE, TOTAL_BLUE, GOLD, FONT_NAME, peso, getXlsxLogoSource, embedLogo
 } = require('./xlsxTemplate');
 const { renderChart } = require('./chartRenderer');
 
@@ -97,13 +97,13 @@ router.get('/suppliers/export/xlsx', requireAuth, async (req, res) => {
     const ws = wb.addWorksheet('Suppliers', { views: [{ showGridLines: false }] });
     ws.columns = [{ width: 28 }, { width: 18 }, { width: 18 }, { width: 16 }, { width: 16 }];
 
-    const logoPath = await getXlsxLogoPath();
+    const logoSource = await getXlsxLogoSource();
     let row = applyLetterhead(wb, ws, {
       fileNameLabel: 'DRWSA_Suppliers.xlsx',
       bigTitleParts: [{ text: 'ALL SUPPLIERS' }],
       subHeadingText: `Report Scope: All-Time — ${rows.length} supplier${rows.length === 1 ? '' : 's'} on file`,
       lastCol: 'E',
-      logoPath
+      logoSource
     });
 
     const headers = ['Supplier', 'Total Transactions', 'Total Amount Paid', 'First Delivery', 'Last Delivery'];
@@ -255,14 +255,8 @@ router.get('/export/xlsx', requireAuth, async (req, res) => {
     // Association logo (same configurable header logo used by every other
     // generated XLSX — see the About Us page's "XLSX Report Logo" uploader),
     // enlarged and anchored in the reserved left column of the header banner.
-    const logoPath = await getXlsxLogoPath();
-    if (logoPath) {
-      try {
-        const ext = path.extname(logoPath).replace('.', '').toLowerCase();
-        const imgId = wb.addImage({ filename: logoPath, extension: ext === 'jpg' ? 'jpeg' : ext });
-        ws.addImage(imgId, { tl: { col: 0.05, row: 0.06 }, ext: { width: 90, height: 90 } });
-      } catch (e) { /* logo embed is best-effort; report still generates without it */ }
-    }
+    const logoSource = await getXlsxLogoSource();
+    embedLogo(wb, ws, logoSource, { col: 0.05, row: 0.06, width: 90, height: 90 });
 
     // Gold report-title bar
     ws.mergeCells(4, 1, 4, LAST_COL);
