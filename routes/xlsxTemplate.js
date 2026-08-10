@@ -3,6 +3,7 @@ const path = require('path');
 const { db } = require('../db/init');
 const { formatDateMDY, groupTopNWithOthers } = require('./utils');
 const { getAllTransactions } = require('./dataAccess');
+const { downloadBuffer } = require('./fileStorage');
 
 const UPLOADS_DIR = path.join(__dirname, '../public/uploads');
 // The logo that appears in the header of every generated XLSX file (delivery
@@ -10,34 +11,41 @@ const UPLOADS_DIR = path.join(__dirname, '../public/uploads');
 // deliberately separate from the *system* logo (settings.js / logo_path,
 // shown on the login page and sidebar). Admins can change this one from the
 // "XLSX Report Logo" control on the About Us page; until they do, it falls
-// back to the association's official seal bundled with the app.
+// back to the association's official seal bundled with the app (a file
+// checked into the repo, so — unlike a custom upload — it doesn't need Cloud
+// Storage and survives restarts fine as-is).
 const DEFAULT_XLSX_LOGO_PATH = path.join(UPLOADS_DIR, 'xlsx-logo-official.png');
 
-// Resolves the currently-configured XLSX header logo to an absolute file path
-// on disk, ready to hand to ExcelJS's addImage(). Every report-building
-// function below calls this once per export so a logo change takes effect on
-// the very next download, with no code changes needed elsewhere.
-async function getXlsxLogoPath() {
+// Resolves the currently-configured XLSX header logo, ready to hand to
+// ExcelJS's addImage(). Every report-building function below calls this once
+// per export so a logo change takes effect on the very next download, with
+// no code changes needed elsewhere. Returns either:
+//   { type: 'file', path: <absolute local path> }   — the bundled default
+//   { type: 'buffer', buffer, extension }            — a custom upload, fetched
+//                                                       from Cloud Storage
+//   null if nothing is available.
+async function getXlsxLogoSource() {
   try {
     const snap = await db.collection('settings').doc('xlsx_logo_path').get();
-    if (snap.exists) {
-      const { value: url, data } = snap.data();
-      if (url) {
-        const rel = url.replace(/^\/?uploads\//, '');
-        const abs = path.join(UPLOADS_DIR, rel);
-        // Ephemeral hosts (e.g. Render) wipe local disk on every
-        // redeploy/restart, so the file this Firestore doc points to may no
-        // longer physically exist even though the doc itself is fine. If we
-        // still have the base64 bytes on the doc, rebuild the file on the
-        // spot before handing the path to ExcelJS.
-        if (!fs.existsSync(abs) && data) {
-          try { fs.writeFileSync(abs, Buffer.from(data, 'base64')); } catch (e) { /* fall through */ }
-        }
-        if (fs.existsSync(abs)) return abs;
-      }
+    const url = snap.exists ? snap.data().value : null;
+    if (url && url.startsWith('http')) {
+      // A custom logo uploaded via the About Us page — stored in Cloud
+      // Storage (persistent), not on local disk, since local disk on Render
+      // is wiped on every restart. Fetch its bytes directly.
+      const buffer = await downloadBuffer(url);
+      const extension = (path.extname(url).replace('.', '').toLowerCase()) || 'png';
+      return { type: 'buffer', buffer, extension: extension === 'jpg' ? 'jpeg' : extension };
     }
-  } catch (e) { /* fall through to the bundled default */ }
-  return fs.existsSync(DEFAULT_XLSX_LOGO_PATH) ? DEFAULT_XLSX_LOGO_PATH : null;
+    if (url) {
+      // Legacy local-path value from before the Cloud Storage migration.
+      const rel = url.replace(/^\/?uploads\//, '');
+      const abs = path.join(UPLOADS_DIR, rel);
+      if (fs.existsSync(abs)) return { type: 'file', path: abs };
+    }
+  } catch (e) {
+    console.error('[xlsxTemplate] Could not load configured XLSX logo, falling back to default:', e.message);
+  }
+  return fs.existsSync(DEFAULT_XLSX_LOGO_PATH) ? { type: 'file', path: DEFAULT_XLSX_LOGO_PATH } : null;
 }
 
 const NAVY = 'FF1C3B6E';
@@ -102,7 +110,22 @@ function applyOuterBorder(ws, startRow, endRow, startCol, endCol) {
 // and the company-name text (B:lastCol) is left-aligned right up against it,
 // so logo and text form one connected letterhead block instead of the logo
 // sitting isolated on the far left with the text centered away from it.
-function applyLetterhead(wb, ws, { fileNameLabel, bigTitleParts, subHeadingText, lastCol = 'H', logoPath }) {
+// Embeds a resolved logo source (see getXlsxLogoSource() above — either a
+// local file or a Cloud Storage buffer) into a worksheet at the given
+// top-left anchor and size. Shared by every report header so both cases
+// (bundled default file vs. a custom upload fetched from Storage) work the
+// same way everywhere a logo appears.
+function embedLogo(wb, ws, logoSource, { col, row, width, height }) {
+  if (!logoSource) return;
+  try {
+    const imgId = logoSource.type === 'buffer'
+      ? wb.addImage({ buffer: logoSource.buffer, extension: logoSource.extension })
+      : wb.addImage({ filename: logoSource.path, extension: (path.extname(logoSource.path).replace('.', '').toLowerCase() || 'png') === 'jpg' ? 'jpeg' : (path.extname(logoSource.path).replace('.', '').toLowerCase() || 'png') });
+    ws.addImage(imgId, { tl: { col, row }, ext: { width, height } });
+  } catch (e) { /* logo embed is best-effort; report still generates without it */ }
+}
+
+function applyLetterhead(wb, ws, { fileNameLabel, bigTitleParts, subHeadingText, lastCol = 'H', logoSource }) {
   const ROW_H = 38; // pt per header row; 4 rows ≈ 152pt (~203px), enough to hold the 192px-tall logo
   [1, 2, 3, 4].forEach(r => { ws.getRow(r).height = ROW_H; });
   ['A1', 'A2', 'A3', 'A4'].forEach(addr => fillCell(ws.getCell(addr), NAVY, {}));
@@ -117,20 +140,10 @@ function applyLetterhead(wb, ws, { fileNameLabel, bigTitleParts, subHeadingText,
   headerCell.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true, indent: 1 };
   headerCell.font = { name: FONT_NAME, bold: true, size: 13, color: { argb: WHITE } };
 
-  // `logoPath` is the caller-resolved XLSX header logo (see getXlsxLogoPath()
-  // above) — falls back to the bundled default if a caller doesn't pass one.
-  const resolvedLogoPath = logoPath || DEFAULT_XLSX_LOGO_PATH;
-  if (resolvedLogoPath && fs.existsSync(resolvedLogoPath)) {
-    try {
-      const ext = path.extname(resolvedLogoPath).replace('.', '').toLowerCase();
-      const imgId = wb.addImage({ filename: resolvedLogoPath, extension: ext === 'jpg' ? 'jpeg' : ext });
-      // ≈192 x 192px — column A is widened to just fit it (with a small
-      // margin) so its right edge sits flush against the header text in
-      // column B, reading as one letterhead unit rather than two separate
-      // elements.
-      ws.addImage(imgId, { tl: { col: 0.05, row: 0.06 }, ext: { width: 192, height: 192 } });
-    } catch (e) { /* logo embed is best-effort; report still generates without it */ }
-  }
+  // ≈192 x 192px — column A is widened to just fit it (with a small margin)
+  // so its right edge sits flush against the header text in column B,
+  // reading as one letterhead unit rather than two separate elements.
+  embedLogo(wb, ws, logoSource, { col: 0.05, row: 0.06, width: 192, height: 192 });
   ws.getColumn(1).width = Math.max(ws.getColumn(1).width || 0, 28);
 
   ws.mergeCells(`A5:${lastCol}5`);
@@ -330,8 +343,8 @@ async function buildDeliveryReportSheet(wb, { sheetName, fileNameLabel, bigTitle
     { width: 8 }, { width: 13 }, { width: 13 }, { width: 4 }, { width: 15 }, { width: 15 }, { width: 15 }
   ];
 
-  const logoPath = await getXlsxLogoPath();
-  let row = applyLetterhead(wb, ws, { fileNameLabel, bigTitleParts, subHeadingText, lastCol: 'H', logoPath });
+  const logoSource = await getXlsxLogoSource();
+  let row = applyLetterhead(wb, ws, { fileNameLabel, bigTitleParts, subHeadingText, lastCol: 'H', logoSource });
 
   // --- Grand Total card ---
   ws.mergeCells('J1:L1');
@@ -573,5 +586,5 @@ module.exports = {
   peso, fillCell, setVal, applyOuterBorder, applyLetterhead, styleTableHeaderRow,
   computeOverviewStats, computeSupplierBreakdown, computeMaterialBreakdown,
   computeScopedOverviewStats, computeScopedSupplierBreakdown, computeScopedMaterialBreakdown,
-  getXlsxLogoPath, buildDeliveryReportSheet
+  getXlsxLogoSource, embedLogo, buildDeliveryReportSheet
 };
