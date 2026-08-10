@@ -2,21 +2,17 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
 const { db } = require('../db/init');
 const { requireAuth } = require('./utils');
+const { uploadBuffer } = require('./fileStorage');
 
-const uploadDir = path.join(__dirname, '../public/uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => {
-    const prefix = req.path.includes('xlsx-logo') ? 'xlsx-logo-' : 'logo-';
-    cb(null, prefix + Date.now() + path.extname(file.originalname));
-  }
-});
+// memoryStorage: keeps the uploaded file as a Buffer in req.file.buffer
+// instead of writing it to local disk. Local disk on Render is ephemeral and
+// gets wiped on every restart (~15 min idle timeout on the free tier) — that
+// was exactly why uploaded logos kept disappearing. uploadBuffer() below
+// saves it to Cloud Storage instead, which persists.
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   fileFilter: (req, file, cb) => {
     const ok = ['image/jpeg', 'image/png'].includes(file.mimetype);
     cb(ok ? null : new Error('Only JPEG/PNG logos are allowed.'), ok);
@@ -34,7 +30,8 @@ router.get('/', async (req, res) => {
     const xlsxValue = xlsxLogoSnap.exists ? xlsxLogoSnap.data().value : null;
     res.json({
       logoUrl: value || null,
-      // Falls back to the bundled default seal until an admin uploads a
+      // Falls back to the bundled default seal (a file checked into the repo
+      // itself, so it survives restarts fine) until an admin uploads a
       // custom one from the About Us page's "XLSX Report Logo" control.
       xlsxLogoUrl: xlsxValue || '/uploads/xlsx-logo-official.png'
     });
@@ -47,12 +44,13 @@ router.get('/', async (req, res) => {
 router.post('/logo', requireAuth, upload.single('logo'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
-    const url = '/uploads/' + req.file.filename;
+    const destPath = 'uploads/logo-' + Date.now() + path.extname(req.file.originalname);
+    const url = await uploadBuffer(req.file.buffer, destPath, req.file.mimetype);
     await db.collection('settings').doc('logo_path').set({ value: url }, { merge: true });
     res.json({ logoUrl: url });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: 'Could not save the logo.' });
+    res.status(500).json({ error: e.message || 'Could not save the logo.' });
   }
 });
 
@@ -64,12 +62,13 @@ router.post('/logo', requireAuth, upload.single('logo'), async (req, res) => {
 router.post('/xlsx-logo', requireAuth, upload.single('logo'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
-    const url = '/uploads/' + req.file.filename;
+    const destPath = 'uploads/xlsx-logo-' + Date.now() + path.extname(req.file.originalname);
+    const url = await uploadBuffer(req.file.buffer, destPath, req.file.mimetype);
     await db.collection('settings').doc('xlsx_logo_path').set({ value: url }, { merge: true });
     res.json({ xlsxLogoUrl: url });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: 'Could not save the XLSX report logo.' });
+    res.status(500).json({ error: e.message || 'Could not save the XLSX report logo.' });
   }
 });
 
